@@ -1,0 +1,11 @@
+.vs/
+Debug/
+Release/
+x64/
+x86/
+*.user
+*.aps
+*.pdb
+*.ilk
+*.obj
+config.json

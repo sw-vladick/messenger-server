@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="ServerMesseneger/ServerMesseneger.vcxproj" Id="cb1e73e9-64ea-4eb4-b1ab-cb9da88a1c4d" />
+</Solution>
