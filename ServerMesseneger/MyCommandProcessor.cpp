@@ -89,20 +89,35 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 	json response;
 	response["command"] = "REGISTER_RESPONSE";
 
-	if (dbManager.RegisterUser(username, password, GetIp(currentSocket))) {
-		response["status"] = "success";
-		std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
+	try {
+		int registerResult = dbManager.RegisterUser(username, password, GetIp(currentSocket));
+
+		if (registerResult == 1) {
+			response["status"] = "success";
+			std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
+		}
+		else if (registerResult == -1) {
+			response["status"] = "locked";
+			std::cout << "[СЕРВЕР] Блокування (перевищено ліміт): " << username << std::endl;
+		}
+		else {
+			response["status"] = "error";
+			std::cout << "[СЕРВЕР] Помилка реєстрації (можливо, логін зайнятий): " << username << std::endl;
+		}
 	}
-	else {
+	catch (const std::exception& e) {
+		std::cout << "!!! [КРАШ В БАЗІ ДАНИХ]: " << e.what() << std::endl;
 		response["status"] = "error";
-		std::cout << "[СЕРВЕР] Помилка реєстрації (можливо, логін зайнятий): " << username << std::endl;
+	}
+	catch (...) {
+		std::cout << "!!! [ТИХИЙ КРАШ В БАЗІ ДАНИХ] !!!" << std::endl;
+		response["status"] = "error";
 	}
 
 	std::string responseString = response.dump();
-
 	int messageSize = responseString.length();
-	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
 
+	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
 	send(currentSocket, responseString.c_str(), messageSize, 0);
 }
 

@@ -29,11 +29,11 @@ public:
 	bool Connect(const std::string& host, const std::string& user, const std::string& password, const std::string& database);
 	~DatabaseManager();
 
-	bool RegisterUser(const std::string& username, const std::string& password, const std::string& ipAddress);
+	int RegisterUser(const std::string& username, const std::string& password, const std::string& ipAddress);
 	int LoginUser(const std::string& username, const std::string& password, const std::string& ipAddress);
 
 	bool StartAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map);
-	void EndAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map, bool status);
+	void EndAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map,const int status);
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;

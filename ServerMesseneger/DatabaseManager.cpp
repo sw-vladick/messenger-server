@@ -43,11 +43,11 @@ std::string DatabaseManager::hashPassword(const std::string& password, const std
     return ss.str();
 }
 
-bool DatabaseManager::RegisterUser(const std::string& username, const std::string& password, const std::string& ipAddress) {
-    bool status = false;
+int DatabaseManager::RegisterUser(const std::string& username, const std::string& password, const std::string& ipAddress) {
     if (!StartAttempts(ipAddress, attemptsRegMutex, registerAttempts)) {
-        return status;
+        return -1;
     }
+    int status = 0;
     {
         std::lock_guard<std::mutex> lock(dbMutex);
         std::string salt = generateSalt();
@@ -62,12 +62,12 @@ bool DatabaseManager::RegisterUser(const std::string& username, const std::strin
 
             pstmt->executeUpdate();
             delete pstmt;
-            status = true;
+            status = 1;
         }
         catch (sql::SQLException& e)
         {
             std::cout << e.what() << std::endl;
-            return status;
+            status = 0;
         }
     }
     EndAttempts(ipAddress, attemptsRegMutex, registerAttempts, status);
@@ -79,9 +79,7 @@ int DatabaseManager::LoginUser(const std::string& username, const std::string& p
     if (!StartAttempts(ipAddress, attemptsLoginMutex, loginAttempts)) {
         return -1;
     }
-
     int status = 0;
-
     try
     {
         std::lock_guard<std::mutex> lock(dbMutex);
@@ -133,13 +131,13 @@ bool DatabaseManager::StartAttempts(const std::string& ipAddress, std::mutex& mt
     return true;
 }
 
-void DatabaseManager::EndAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map, bool status)
+void DatabaseManager::EndAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map,const int status)
 {
     {
         std::lock_guard<std::mutex> lock(mtx);
         auto& attempt = u_map[ipAddress];
 
-        if (status == true) {
+        if (status == 1) {
             u_map.erase(ipAddress);
         }
         else if (attempt.failedCount == 5) {
