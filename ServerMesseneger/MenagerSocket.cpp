@@ -8,7 +8,10 @@ MenagerSocket::MenagerSocket()
 		std::exit(0);
 	}
 	maxClients = 8;
-	clients = new Client[maxClients];
+	clients = new Client * [maxClients];
+	for (int i = 0; i < maxClients; i++) {
+		clients[i] = nullptr;
+	}
 	currentCountClient = 0;
 }
 
@@ -38,31 +41,46 @@ void MenagerSocket::AcceptClient()
 		sockaddr_in addressClient;
 		int sizeClient = sizeof(addressClient);
 		SOCKET clientSocket = accept(serverSocket, (sockaddr*)&addressClient, &sizeClient);
-		if  (clientSocket != INVALID_SOCKET) {
+
+		if (clientSocket != INVALID_SOCKET) {
 			std::lock_guard<std::mutex> lock(acceptMTX);
-			if (currentCountClient < maxClients - 1) {
-				for (int i = 0; i < maxClients; i++)
-				{
-					if (clients[i].clientSocket == INVALID_SOCKET) {
-						clients[i].clientSocket = clientSocket;
-						currentCountClient++;
-						std::thread t([=]() {HandleSocket(clients[i],i);});
-						t.detach();
-						break;
-					}
-				}
-			}
-			else {
-				std::cout << "create new slots\n";
+
+			if (currentCountClient >= maxClients - 1) {
+				std::cout << "create new slots. New max: " << maxClients * 2 << "\n";
+				int oldMax = maxClients;
 				maxClients *= 2;
-				Client* temporaryClients = new Client[maxClients];
-				for (size_t i = 0; i < maxClients/2; i++)
-				{
-					temporaryClients[i] = std::move(clients[i]);
+
+				Client** temporaryClients = new Client * [maxClients];
+
+				for (int i = 0; i < oldMax; i++) {
+					temporaryClients[i] = clients[i];
 				}
+				for (int i = oldMax; i < maxClients; i++) {
+					temporaryClients[i] = nullptr;
+				}
+
 				delete[] clients;
 				clients = temporaryClients;
+			}
 
+			for (int i = 0; i < maxClients; i++)
+			{
+
+				if (clients[i] == nullptr) {
+					clients[i] = new Client();
+					clients[i]->clientSocket = INVALID_SOCKET;
+				}
+
+				if (clients[i]->clientSocket == INVALID_SOCKET) {
+					clients[i]->clientSocket = clientSocket;
+					currentCountClient++;
+
+					Client* targetClient = clients[i];
+
+					std::thread t([=]() { HandleSocket(*targetClient, i); });
+					t.detach();
+					break;
+				}
 			}
 		}
 		else {
@@ -97,7 +115,7 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 		}
 
 		std::string msg(buf, expectedBytes);
-
+		std::cout << msg << std::endl;
 		try
 		{
 			json parsedData = json::parse(msg);

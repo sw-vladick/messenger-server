@@ -27,7 +27,7 @@ public:
 private:
 	SOCKET serverSocket;
 	WSAControl wsadata;
-	Client* clients;
+	Client** clients;
 	int currentCountClient;
 	std::mutex acceptMTX;
 	int maxClients;

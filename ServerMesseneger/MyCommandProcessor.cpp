@@ -50,9 +50,15 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 	response["command"] = "LOGIN_RESPONSE";
 
 	try {
-		if (dbManager.LoginUser(username, password)) {
+		int loginResult = dbManager.LoginUser(username, password, GetIp(currentSocket));
+
+		if (loginResult == 1) {
 			response["status"] = "success";
 			std::cout << "[СЕРВЕР] Успішна авторизація: " << username << std::endl;
+		}
+		else if (loginResult == -1) {
+			response["status"] = "locked";
+			std::cout << "[СЕРВЕР] Блокування (перевищено ліміт): " << username << std::endl;
 		}
 		else {
 			response["status"] = "error";
@@ -73,7 +79,6 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 
 	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
 	send(currentSocket, responseString.c_str(), messageSize, 0);
-
 }
 
 void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& data)
@@ -84,7 +89,7 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 	json response;
 	response["command"] = "REGISTER_RESPONSE";
 
-	if (dbManager.RegisterUser(username, password)) {
+	if (dbManager.RegisterUser(username, password, GetIp(currentSocket))) {
 		response["status"] = "success";
 		std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
 	}
@@ -99,4 +104,18 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
 
 	send(currentSocket, responseString.c_str(), messageSize, 0);
+}
+
+std::string MyCommandProcessor::GetIp(SOCKET currentSocket)
+{
+	sockaddr_in addr;
+	int sizeAddr = sizeof(addr);
+
+	getpeername(currentSocket, (sockaddr*)&addr, &sizeAddr);
+	char ipStr[INET_ADDRSTRLEN];
+
+	inet_ntop(AF_INET, &addr.sin_addr, ipStr, INET_ADDRSTRLEN);
+
+	std::string clientIP(ipStr);
+	return clientIP;
 }
