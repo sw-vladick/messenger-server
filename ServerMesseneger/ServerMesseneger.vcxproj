@@ -149,6 +149,7 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CryptoManager.cpp" />
     <ClCompile Include="DatabaseManager.cpp" />
     <ClCompile Include="MenagerSocket.cpp" />
     <ClCompile Include="MyCommandProcessor.cpp" />
@@ -157,6 +158,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Constant.h" />
+    <ClInclude Include="CryptoManager.h" />
     <ClInclude Include="DatabaseManager.h" />
     <ClInclude Include="json.hpp" />
     <ClInclude Include="MenagerSocket.h" />

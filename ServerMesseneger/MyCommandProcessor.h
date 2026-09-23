@@ -8,6 +8,7 @@
 #include <fstream>
 #include <WS2tcpip.h>
 #include "DatabaseManager.h"
+#include "CryptoManager.h"
 
 using json = nlohmann::json;
 
@@ -18,10 +19,12 @@ public:
 	void Execute(std::string command, SOCKET currentSocket, const json& data);
 	void HandleLogin(SOCKET currentSocket, const json& data);
 	void HandlRegistration(SOCKET currentSocket, const json& data);
-	
+	void HandleHandshake(SOCKET currentSocket, const json& data);
 private:
 	std::string GetIp(SOCKET currentSocket);
 	std::unordered_map<std::string, std::function<void(SOCKET, const json&)>> commands;
+	std::unordered_map<SOCKET, std::string> clientAesKeys;
 	DatabaseManager dbManager;
+	CryptoManager cryptoManager;
 };
 

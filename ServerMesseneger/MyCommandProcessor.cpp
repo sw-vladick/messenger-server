@@ -2,13 +2,21 @@
 
 MyCommandProcessor::MyCommandProcessor()
 {
+	if (cryptoManager.LoadPrivateKey("private_key.pem")) {
+		std::cout << "[СЕРВЕР] RSA ключ завантажено успішно!" << std::endl;
+	}
+	else {
+		std::cout << "[СЕРВЕР] ПОМИЛКА: Не вдалося завантажити RSA ключ!" << std::endl;
+	}
 	commands.emplace("LOGIN", [this](SOCKET currentSocket, const json& data) {
 		HandleLogin(currentSocket, data);
 		});
 	commands.emplace("REGISTER", [this](SOCKET currentSocket, const json& data) {
 		HandlRegistration(currentSocket, data);
 		});
-
+	commands.emplace("HANDSHAKE", [this](SOCKET currentSocket, const json& data) {
+		HandleHandshake(currentSocket, data);
+		});
 	std::ifstream configFile("config.json");
 	if (!configFile.is_open()) {
 		std::cout << "[КРИТИЧНА ПОМИЛКА] Не знайдено файл config.json!" << std::endl;
@@ -43,8 +51,18 @@ void MyCommandProcessor::Execute(std::string command, SOCKET currentSocket, cons
 
 void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 {
-	std::string username = data.value("Username", "");
-	std::string password = data.value("Password", "");
+	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) { return; }
+
+	std::string payload = data.value("payload", "");
+
+	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
+
+	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+
+	json encryptedJson = json::parse(strJson);
+
+	std::string username = encryptedJson.value("Username", "");
+	std::string password = encryptedJson.value("Password", "");
 
 	json response;
 	response["command"] = "LOGIN_RESPONSE";
@@ -75,16 +93,36 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 	}
 
 	std::string responseString = response.dump();
-	int messageSize = responseString.length();
+
+	std::string resultEnc = cryptoManager.EncryptAES(responseString, clientAesKeys[currentSocket]);
+	std::string finaleEncJson = cryptoManager.Base64Encode(resultEnc);
+
+	json finalResponse;
+
+	finalResponse["command"] = "LOGIN_RESPONSE";
+	finalResponse["payload"] = finaleEncJson;
+
+	std::string finaleResponseStr = finalResponse.dump();
+	int messageSize = finaleResponseStr.length();
 
 	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
-	send(currentSocket, responseString.c_str(), messageSize, 0);
+	send(currentSocket, finaleResponseStr.c_str(), messageSize, 0);
 }
 
 void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& data)
 {
-	std::string username = data.value("Username", "");
-	std::string password = data.value("Password", "");
+	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) { return; }
+
+	std::string payload = data.value("payload", "");
+
+	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
+
+	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+
+	json encryptedJson = json::parse(strJson);
+
+	std::string username = encryptedJson.value("Username", "");
+	std::string password = encryptedJson.value("Password", "");
 
 	json response;
 	response["command"] = "REGISTER_RESPONSE";
@@ -112,6 +150,41 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 	catch (...) {
 		std::cout << "!!! [ТИХИЙ КРАШ В БАЗІ ДАНИХ] !!!" << std::endl;
 		response["status"] = "error";
+	}
+
+	std::string responseString = response.dump();
+
+	std::string resultEnc = cryptoManager.EncryptAES(responseString, clientAesKeys[currentSocket]);
+	std::string finaleEncJson = cryptoManager.Base64Encode(resultEnc);
+
+	json finalResponse;
+
+	finalResponse["command"] = "REGISTER_RESPONSE";
+	finalResponse["payload"] = finaleEncJson;
+
+	std::string finaleResponseStr = finalResponse.dump();
+	int messageSize = finaleResponseStr.length();
+
+	send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
+	send(currentSocket, finaleResponseStr.c_str(), messageSize, 0);
+}
+
+void MyCommandProcessor::HandleHandshake(SOCKET currentSocket, const json& data)
+{
+	std::string key = data.value("key", "");
+
+	json response;
+	response["command"] = "HANDSHAKE_RESPONSE";
+
+	std::string result_key = cryptoManager.DecryptRSA(key);
+	if (result_key.empty()) {
+		response["status"] = "error";
+		std::cout << "[СЕРВЕР] Помилка розшифрування хендшейку!" << std::endl;
+	}
+	else {
+		clientAesKeys[currentSocket] = result_key;
+		response["status"] = "ready";
+		std::cout << "[СЕРВЕР] Хендшейк успішний, AES ключ збережено!" << std::endl;
 	}
 
 	std::string responseString = response.dump();
