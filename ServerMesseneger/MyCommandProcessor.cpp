@@ -17,6 +17,9 @@ MyCommandProcessor::MyCommandProcessor()
 	commands.emplace("HANDSHAKE", [this](SOCKET currentSocket, const json& data) {
 		HandleHandshake(currentSocket, data);
 		});
+	commands.emplace("SEARCH_USER", [this](SOCKET currentSocket, const json& data) {
+		HandleSearchUser(currentSocket, data);
+		});
 	std::ifstream configFile("config.json");
 	if (!configFile.is_open()) {
 		std::cout << "[КРИТИЧНА ПОМИЛКА] Не знайдено файл config.json!" << std::endl;
@@ -72,6 +75,7 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 
 		if (loginResult == 1) {
 			response["status"] = "success";
+			loggedInUsers[currentSocket] = username;
 			std::cout << "[СЕРВЕР] Успішна авторизація: " << username << std::endl;
 		}
 		else if (loginResult == -1) {
@@ -132,6 +136,7 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 
 		if (registerResult == 1) {
 			response["status"] = "success";
+			loggedInUsers[currentSocket] = username;
 			std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
 		}
 		else if (registerResult == -1) {
@@ -206,4 +211,62 @@ std::string MyCommandProcessor::GetIp(SOCKET currentSocket)
 
 	std::string clientIP(ipStr);
 	return clientIP;
+}
+
+void MyCommandProcessor::HandleSearchUser(SOCKET currentSocket, const json& data)
+{
+	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return;
+
+	std::string payload = data.value("payload", "");
+	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
+	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+
+	try {
+		json requestJson = json::parse(strJson);
+		std::string targetQuery = requestJson.value("username", "");
+
+		std::string currentUsername = loggedInUsers[currentSocket];
+
+		std::vector<std::string> foundUsers = dbManager.SearchUsers(targetQuery);
+
+		std::vector<std::string> filteredUsers;
+		for (const std::string& u : foundUsers) {
+			if (u != currentUsername) {
+				filteredUsers.push_back(u);
+			}
+		}
+
+		json responseInner;
+		responseInner["query"] = targetQuery;
+		responseInner["status"] = filteredUsers.empty() ? "not_found" : "found";
+
+		responseInner["users"] = filteredUsers;
+
+		std::string innerString = responseInner.dump();
+		std::string encryptedInner = cryptoManager.EncryptAES(innerString, clientAesKeys[currentSocket]);
+		std::string encodedPayload = cryptoManager.Base64Encode(encryptedInner);
+
+		json finalResponse;
+		finalResponse["Command"] = "SEARCH_RESPONSE";
+		finalResponse["payload"] = encodedPayload;
+
+		std::string responseStr = finalResponse.dump();
+		int messageSize = responseStr.length();
+
+		send(currentSocket, reinterpret_cast<const char*>(&messageSize), sizeof(int), 0);
+		send(currentSocket, responseStr.c_str(), messageSize, 0);
+
+		std::cout << "[СЕРВЕР] Пошук по запиту: " << targetQuery
+			<< " | Знайдено: " << filteredUsers.size() << " користувачів." << std::endl;
+	}
+	catch (const json::exception& e) {
+		std::cout << "[СЕРВЕР] JSON Помилка в SEARCH_USER: " << e.what() << std::endl;
+		std::cout << "[СЕРВЕР] Рядок, який намагалися спарсити: " << strJson << std::endl;
+	}
+	catch (const std::exception& e) {
+		std::cout << "[СЕРВЕР] Стандартна помилка в SEARCH_USER: " << e.what() << std::endl;
+	}
+	catch (...) {
+		std::cout << "[СЕРВЕР] Невідома помилка обробки SEARCH_USER" << std::endl;
+	}
 }

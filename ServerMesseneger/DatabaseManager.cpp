@@ -146,6 +146,26 @@ void DatabaseManager::EndAttempts(const std::string& ipAddress, std::mutex& mtx,
     }
 }
 
+bool DatabaseManager::UserExists(const std::string& username)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sql::PreparedStatement* pstmt = con->prepareStatement("SELECT id FROM Users WHERE username = ?");
+        pstmt->setString(1, username);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+        bool exists = res->next();
+
+        delete res;
+        delete pstmt;
+        return exists;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка пошуку користувача: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 bool DatabaseManager::Connect(const std::string& host, const std::string& user, const std::string& password, const std::string& database)
 {
     try {
@@ -161,4 +181,31 @@ bool DatabaseManager::Connect(const std::string& host, const std::string& user, 
         std::cout << "[MYSQL ERROR] " << e.what() << std::endl;
         return false;
     }
+}
+
+std::vector<std::string> DatabaseManager::SearchUsers(const std::string& searchQuery)
+{
+    std::vector<std::string> foundUsers;
+
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement("SELECT username FROM Users WHERE username LIKE ? LIMIT 20");
+
+        pstmt->setString(1, searchQuery + "%");
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        while (res->next()) {
+            foundUsers.push_back(res->getString("username"));
+        }
+
+        delete res;
+        delete pstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка живого пошуку користувачів: " << e.what() << std::endl;
+    }
+
+    return foundUsers;
 }

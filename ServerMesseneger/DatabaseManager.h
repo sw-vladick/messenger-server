@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <unordered_map>
 #include <chrono>
+#include <vector>
 
 
 struct ipAttempts {
@@ -34,6 +35,9 @@ public:
 
 	bool StartAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map);
 	void EndAttempts(const std::string& ipAddress, std::mutex& mtx, mapIp& u_map,const int status);
+
+	bool UserExists(const std::string& username);
+	std::vector<std::string> SearchUsers(const std::string& searchQuery);
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;

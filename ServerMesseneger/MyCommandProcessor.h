@@ -24,7 +24,9 @@ private:
 	std::string GetIp(SOCKET currentSocket);
 	std::unordered_map<std::string, std::function<void(SOCKET, const json&)>> commands;
 	std::unordered_map<SOCKET, std::string> clientAesKeys;
+	std::unordered_map<SOCKET, std::string> loggedInUsers;
 	DatabaseManager dbManager;
 	CryptoManager cryptoManager;
+	void HandleSearchUser(SOCKET currentSocket, const json& data);
 };
 
