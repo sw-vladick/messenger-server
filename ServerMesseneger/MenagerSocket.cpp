@@ -93,36 +93,46 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 {
 	while (true)
 	{
-		char buf[BUFFER_SIZE];
-
 		int expectedBytes = 0;
 
-		recv(currentClient.clientSocket, (char*)&expectedBytes, 4, 0);
-		if (expectedBytes <= 0 || expectedBytes > BUFFER_SIZE) {
-			std::cerr << "Invalid message size or client left\n";
+		int headerResult = recv(currentClient.clientSocket, reinterpret_cast<char*>(&expectedBytes), sizeof(int), 0);
+
+		if (headerResult <= 0) {
+			std::cout << "[СЕРВЕР] Клієнт відключився.\n";
 			break;
 		}
 
-		int resultRecv = recv(currentClient.clientSocket, buf, expectedBytes, 0);
-		while (true)
+		if (expectedBytes <= 0 || expectedBytes > BUFFER_SIZE) {
+			std::cout << "[СЕРВЕР] Критична помилка розміру пакета: " << expectedBytes << ". Відключаємо клієнта.\n";
+			break;
+		}
+
+		char buf[BUFFER_SIZE];
+		int totalReceived = 0;
+
+		while (totalReceived < expectedBytes)
 		{
-			if (resultRecv < expectedBytes) {
-				resultRecv += recv(currentClient.clientSocket, buf, expectedBytes - resultRecv, resultRecv);
-			}
-			else {
+			int bytes = recv(currentClient.clientSocket, buf + totalReceived, expectedBytes - totalReceived, 0);
+
+			if (bytes <= 0) {
 				break;
 			}
+			totalReceived += bytes;
+		}
+
+		if (totalReceived < expectedBytes) {
+			std::cout << "[СЕРВЕР] З'єднання розірвано під час читання пакета.\n";
+			break;
 		}
 
 		std::string msg(buf, expectedBytes);
-		std::cout << msg << std::endl;
+
 		try
 		{
 			json parsedData = json::parse(msg);
 
 			if (parsedData.contains("Command")) {
 				std::string command = parsedData["Command"];
-
 				RouteMap.Execute(command, currentClient.clientSocket, parsedData);
 			}
 		}

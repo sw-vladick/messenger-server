@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <chrono>
 #include <vector>
+#include "Models.h"
 
 
 struct ipAttempts {
@@ -38,6 +39,8 @@ public:
 
 	bool UserExists(const std::string& username);
 	std::vector<std::string> SearchUsers(const std::string& searchQuery);
+
+	std::vector<ChatMessage> GetChatHistory(const std::string& user1, const std::string& user2);
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;

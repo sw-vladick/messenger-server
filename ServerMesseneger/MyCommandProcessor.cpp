@@ -8,6 +8,7 @@ MyCommandProcessor::MyCommandProcessor()
 	else {
 		std::cout << "[СЕРВЕР] ПОМИЛКА: Не вдалося завантажити RSA ключ!" << std::endl;
 	}
+
 	commands.emplace("LOGIN", [this](SOCKET currentSocket, const json& data) {
 		HandleLogin(currentSocket, data);
 		});
@@ -20,6 +21,10 @@ MyCommandProcessor::MyCommandProcessor()
 	commands.emplace("SEARCH_USER", [this](SOCKET currentSocket, const json& data) {
 		HandleSearchUser(currentSocket, data);
 		});
+	commands.emplace("GET_CHAT_HISTORY", [this](SOCKET currentSocket, const json& data) {
+		HandleGetChatHistory(currentSocket, data);
+		});
+
 	std::ifstream configFile("config.json");
 	if (!configFile.is_open()) {
 		std::cout << "[КРИТИЧНА ПОМИЛКА] Не знайдено файл config.json!" << std::endl;
@@ -199,6 +204,62 @@ void MyCommandProcessor::HandleHandshake(SOCKET currentSocket, const json& data)
 	send(currentSocket, responseString.c_str(), messageSize, 0);
 }
 
+void MyCommandProcessor::HandleGetChatHistory(SOCKET currentSocket, const json& data)
+{
+	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return;
+
+	std::string payload = data.value("payload", "");
+	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
+	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+
+	if (strJson.empty()) {
+		std::cout << "[СЕРВЕР] Отримано битий пакет історії, ігноруємо." << std::endl;
+		return;
+	}
+
+	try
+	{
+		json requestJson = json::parse(strJson);
+
+		std::string targetUser = requestJson.value("target_user", "");
+		std::string currentUser = loggedInUsers[currentSocket];
+
+		std::vector<ChatMessage> messages = dbManager.GetChatHistory(currentUser, targetUser);
+
+		json response;
+		json messagesArray = json::array();
+		response["target_user"] = targetUser;
+		response["status"] = "success";
+
+		for (const ChatMessage& msg : messages) {
+			messagesArray.push_back({
+				{"sender",msg.sender},
+				{"text",msg.text},
+				{"timestamp",msg.timestamp}
+				});
+		}
+		response["messages"] = messagesArray;
+		
+		std::string strResponse = response.dump();
+		std::string encryptedResponse = cryptoManager.EncryptAES(strResponse, clientAesKeys[currentSocket]);
+		std::string encodedResponse = cryptoManager.Base64Encode(encryptedResponse);
+
+		json finalResponce;
+		finalResponce["Command"] = "CHAT_HISTORY_RESPONSE";
+		finalResponce["payload"] = encodedResponse;
+
+		std::string finalStrResponce = finalResponce.dump();
+		int jsonSize = finalStrResponce.length();
+
+		send(currentSocket, reinterpret_cast<const char*>(&jsonSize), sizeof(int), 0);
+		send(currentSocket, finalStrResponce.c_str(), jsonSize, 0);
+	}
+	catch (const std::exception& e)
+	{
+		std::cout << "[СЕРВЕР] Помилка в GET_CHAT_HISTORY: " << e.what() << std::endl;
+	}
+}
+
 std::string MyCommandProcessor::GetIp(SOCKET currentSocket)
 {
 	sockaddr_in addr;
@@ -220,6 +281,11 @@ void MyCommandProcessor::HandleSearchUser(SOCKET currentSocket, const json& data
 	std::string payload = data.value("payload", "");
 	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
 	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+
+	if (strJson.empty()) {
+		std::cout << "[СЕРВЕР] Отримано битий пакет (розшифровка не вдалася), ігноруємо." << std::endl;
+		return;
+	}
 
 	try {
 		json requestJson = json::parse(strJson);

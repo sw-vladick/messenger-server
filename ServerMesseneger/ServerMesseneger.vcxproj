@@ -162,6 +162,7 @@
     <ClInclude Include="DatabaseManager.h" />
     <ClInclude Include="json.hpp" />
     <ClInclude Include="MenagerSocket.h" />
+    <ClInclude Include="Models.h" />
     <ClInclude Include="MyCommandProcessor.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="WSAControl.h" />

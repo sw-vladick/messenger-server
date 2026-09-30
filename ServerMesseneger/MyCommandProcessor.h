@@ -20,6 +20,7 @@ public:
 	void HandleLogin(SOCKET currentSocket, const json& data);
 	void HandlRegistration(SOCKET currentSocket, const json& data);
 	void HandleHandshake(SOCKET currentSocket, const json& data);
+	void HandleGetChatHistory(SOCKET currentSocket, const json& data);
 private:
 	std::string GetIp(SOCKET currentSocket);
 	std::unordered_map<std::string, std::function<void(SOCKET, const json&)>> commands;

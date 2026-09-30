@@ -174,6 +174,9 @@ bool DatabaseManager::Connect(const std::string& host, const std::string& user, 
         con = driver->connect(host, user, password);
         con->setSchema(database);
 
+        std::unique_ptr<sql::Statement> stmt(con->createStatement());
+        stmt->execute("SET NAMES utf8mb4");
+
         std::cout << "[БД] Успішно підключено до бази: " << database << std::endl;
         return true;
     }
@@ -208,4 +211,46 @@ std::vector<std::string> DatabaseManager::SearchUsers(const std::string& searchQ
     }
 
     return foundUsers;
+}
+
+std::vector<ChatMessage> DatabaseManager::GetChatHistory(const std::string& user1, const std::string& user2)
+{
+    std::vector<ChatMessage> messages;
+
+    try
+    {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+       sql::PreparedStatement* pstmt = con->prepareStatement(
+        "SELECT u.username AS sender_name, m.content, DATE_FORMAT(m.created_at, '%H:%i') as time "
+        "FROM messages m "
+        "JOIN Users u ON m.sender_id = u.id "
+        "WHERE (m.sender_id = (SELECT id FROM Users WHERE username = ?) AND m.receiver_id = (SELECT id FROM Users WHERE username = ?)) "
+        "   OR (m.sender_id = (SELECT id FROM Users WHERE username = ?) AND m.receiver_id = (SELECT id FROM Users WHERE username = ?)) "
+        "ORDER BY m.created_at ASC"
+    );
+
+        pstmt->setString(1, user1);
+        pstmt->setString(2, user2);
+        pstmt->setString(3, user2);
+        pstmt->setString(4, user1);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        while (res->next()) {
+            ChatMessage msg;
+            msg.sender = res->getString("sender_name");
+            msg.text = res->getString("content");
+            msg.timestamp = res->getString("time");
+
+            messages.push_back(msg);
+        }
+
+        delete pstmt;
+        delete res;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка завантаження історії чату: " << e.what() << std::endl;
+    }
+    return messages;
 }
