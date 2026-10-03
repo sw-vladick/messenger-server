@@ -19,7 +19,7 @@ struct Client {
 class MenagerSocket
 {
 public:
-	MenagerSocket();
+	MenagerSocket(const std::string& db_master_key);
 	void FromBindToListen();
 	void AcceptClient();
 	void HandleSocket(Client& currentClient, int index);

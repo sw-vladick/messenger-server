@@ -27,7 +27,7 @@ using mapIp = std::unordered_map<std::string, ipAttempts>;
 class DatabaseManager
 {
 public:
-	DatabaseManager();
+	DatabaseManager(const std::string& db_master_key);
 	bool Connect(const std::string& host, const std::string& user, const std::string& password, const std::string& database);
 	~DatabaseManager();
 
@@ -41,6 +41,13 @@ public:
 	std::vector<std::string> SearchUsers(const std::string& searchQuery);
 
 	std::vector<ChatMessage> GetChatHistory(const std::string& user1, const std::string& user2);
+	bool SaveMessage(const std::string& sender, const std::string& receiver, const std::string text);
+
+	std::vector<std::string> GetRecentChats(const std::string& username);
+
+	bool EditMessage(int messageId, const std::string& senderUsername, const std::string& newText);
+
+	void MarkMessagesAsRead(const std::string& sender, const std::string& receiver);
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;
@@ -50,5 +57,6 @@ private:
 	mapIp registerAttempts;
 	std::mutex attemptsLoginMutex;
 	std::mutex attemptsRegMutex;
+	std::string masterKey;
 };
 

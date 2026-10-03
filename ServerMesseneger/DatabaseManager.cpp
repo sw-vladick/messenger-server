@@ -1,8 +1,9 @@
 #include "DatabaseManager.h"
 
 
-DatabaseManager::DatabaseManager() : con(nullptr)
+DatabaseManager::DatabaseManager(const std::string& db_master_key) : con(nullptr)
 {
+    masterKey = db_master_key;
 }
 
 DatabaseManager::~DatabaseManager() {
@@ -222,7 +223,7 @@ std::vector<ChatMessage> DatabaseManager::GetChatHistory(const std::string& user
         std::lock_guard<std::mutex> lock(dbMutex);
 
        sql::PreparedStatement* pstmt = con->prepareStatement(
-        "SELECT u.username AS sender_name, m.content, DATE_FORMAT(m.created_at, '%H:%i') as time "
+        "SELECT m.id, u.username AS sender_name, m.content, DATE_FORMAT(m.created_at, '%H:%i') as time, m.is_edited, m.is_read "
         "FROM messages m "
         "JOIN Users u ON m.sender_id = u.id "
         "WHERE (m.sender_id = (SELECT id FROM Users WHERE username = ?) AND m.receiver_id = (SELECT id FROM Users WHERE username = ?)) "
@@ -239,6 +240,9 @@ std::vector<ChatMessage> DatabaseManager::GetChatHistory(const std::string& user
 
         while (res->next()) {
             ChatMessage msg;
+            msg.id = res->getInt("id");
+            msg.is_edited = res->getBoolean("is_edited");
+            msg.is_read = res->getBoolean("is_read");
             msg.sender = res->getString("sender_name");
             msg.text = res->getString("content");
             msg.timestamp = res->getString("time");
@@ -253,4 +257,114 @@ std::vector<ChatMessage> DatabaseManager::GetChatHistory(const std::string& user
         std::cout << "[DB ERROR] Помилка завантаження історії чату: " << e.what() << std::endl;
     }
     return messages;
+}
+
+bool DatabaseManager::SaveMessage(const std::string& sender, const std::string& receiver, const std::string text)
+{
+    try
+    {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "INSERT INTO messages (sender_id, receiver_id, content) "
+            "VALUES ("
+            "  (SELECT id FROM Users WHERE username = ?), "
+            "  (SELECT id FROM Users WHERE username = ?), "
+            "  ?"
+            ")"
+        );
+
+        pstmt->setString(1, sender);
+        pstmt->setString(2, receiver);
+        pstmt->setString(3, text);
+
+        pstmt->executeUpdate();
+        delete pstmt;
+        return true;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка завантаження повідомлення: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+std::vector<std::string> DatabaseManager::GetRecentChats(const std::string& username)
+{
+    std::vector<std::string> foundUsers;
+
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "SELECT DISTINCT u.username "
+            "FROM messages m "
+            "JOIN Users u ON(u.id = m.sender_id OR u.id = m.receiver_id) "
+            "WHERE(m.sender_id = (SELECT id FROM Users WHERE username = ? ) "
+            "OR m.receiver_id = (SELECT id FROM Users WHERE username = ? )) "
+            "AND u.username != ?;"
+        );
+
+        pstmt->setString(1, username);
+        pstmt->setString(2, username);
+        pstmt->setString(3, username);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        while (res->next()) {
+            foundUsers.push_back(res->getString("username"));
+        }
+
+        delete res;
+        delete pstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка живого пошуку користувачів: " << e.what() << std::endl;
+    }
+
+    return foundUsers;
+}
+
+bool DatabaseManager::EditMessage(int messageId, const std::string& senderUsername, const std::string& newText)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "UPDATE messages SET content = ?, is_edited = TRUE "
+            "WHERE id = ? AND sender_id = (SELECT id FROM Users WHERE username = ?)"
+        );
+
+        pstmt->setString(1, newText);
+        pstmt->setInt(2, messageId);
+        pstmt->setString(3, senderUsername);
+
+        int updatedRows = pstmt->executeUpdate();
+        delete pstmt;
+
+        return updatedRows > 0;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка редагування повідомлення: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void DatabaseManager::MarkMessagesAsRead(const std::string& sender, const std::string& receiver)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "UPDATE messages SET is_read = TRUE "
+            "WHERE sender_id = (SELECT id FROM Users WHERE username = ?) "
+            "AND receiver_id = (SELECT id FROM Users WHERE username = ?) "
+            "AND is_read = FALSE"
+        );
+        pstmt->setString(1, sender);
+        pstmt->setString(2, receiver);
+        pstmt->executeUpdate();
+        delete pstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка оновлення статусу прочитання: " << e.what() << std::endl;
+    }
 }

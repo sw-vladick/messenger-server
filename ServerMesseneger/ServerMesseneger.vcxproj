@@ -149,6 +149,7 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Config.cpp" />
     <ClCompile Include="CryptoManager.cpp" />
     <ClCompile Include="DatabaseManager.cpp" />
     <ClCompile Include="MenagerSocket.cpp" />
@@ -157,6 +158,7 @@
     <ClCompile Include="WSAControl.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Config.h" />
     <ClInclude Include="Constant.h" />
     <ClInclude Include="CryptoManager.h" />
     <ClInclude Include="DatabaseManager.h" />

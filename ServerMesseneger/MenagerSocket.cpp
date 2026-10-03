@@ -1,6 +1,6 @@
 #include "MenagerSocket.h"
 
-MenagerSocket::MenagerSocket()
+MenagerSocket::MenagerSocket(const std::string& db_master_key) : RouteMap(db_master_key)
 {
 	serverSocket = wsadata.CreateSocketTCP();
 	if (serverSocket == INVALID_SOCKET) {
@@ -102,17 +102,17 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 			break;
 		}
 
-		if (expectedBytes <= 0 || expectedBytes > BUFFER_SIZE) {
+		if (expectedBytes <= 0 || expectedBytes > 5 * 1024 * 1024) {
 			std::cout << "[СЕРВЕР] Критична помилка розміру пакета: " << expectedBytes << ". Відключаємо клієнта.\n";
 			break;
 		}
 
-		char buf[BUFFER_SIZE];
+		std::vector<char> buf(expectedBytes);
 		int totalReceived = 0;
 
 		while (totalReceived < expectedBytes)
 		{
-			int bytes = recv(currentClient.clientSocket, buf + totalReceived, expectedBytes - totalReceived, 0);
+			int bytes = recv(currentClient.clientSocket, buf.data() + totalReceived, expectedBytes - totalReceived, 0);
 
 			if (bytes <= 0) {
 				break;
@@ -125,7 +125,7 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 			break;
 		}
 
-		std::string msg(buf, expectedBytes);
+		std::string msg(buf.begin(), buf.end());
 
 		try
 		{
@@ -140,6 +140,8 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 			std::cout << "[ПОМИЛКА] Прийшов битий JSON: " << e.what() << std::endl;
 		}
 	}
+	RouteMap.RemoveClient(currentClient.clientSocket);
+
 	closesocket(currentClient.clientSocket);
 	currentClient.DoEmptyClient();
 	--currentCountClient;
