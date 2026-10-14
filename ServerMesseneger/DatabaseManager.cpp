@@ -368,3 +368,52 @@ void DatabaseManager::MarkMessagesAsRead(const std::string& sender, const std::s
         std::cout << "[DB ERROR] Помилка оновлення статусу прочитання: " << e.what() << std::endl;
     }
 }
+
+bool DatabaseManager::IsUserVerified(const std::string& username)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "SELECT is_verified FROM Users WHERE username = ?;"
+        );
+
+        pstmt->setString(1, username);
+
+        sql::ResultSet* res = pstmt->executeQuery();
+
+        bool verified = false;
+        if (res->next()) {
+            verified = res->getBoolean("is_verified");
+        }
+
+        delete pstmt;
+        delete res;
+        return verified;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка IsUserVerified: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void DatabaseManager::SetUserEmailVerified(const std::string& username, const std::string& email)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "UPDATE Users SET email = ?, is_verified = 1 WHERE username = ?;"
+        );
+
+        pstmt->setString(1, email);
+        pstmt->setString(2, username);
+
+        pstmt->executeUpdate();
+
+        delete pstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR] Помилка IsUserVerified: " << e.what() << std::endl;
+    }
+}

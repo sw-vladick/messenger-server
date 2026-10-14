@@ -78,10 +78,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>;D:\Libraries\curl-8.22.0_2-win64-mingw\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>;D:\Libraries\curl-8.22.0_2-win64-mingw\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);libcurl.dll.a</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -97,10 +100,13 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>;D:\Libraries\curl-8.22.0_2-win64-mingw\include</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>;D:\Libraries\curl-8.22.0_2-win64-mingw\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);libcurl.dll.a</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -113,14 +119,14 @@
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>D:\Libraries\MySQL Connector C++ 26.7\include\jdbc;D:\Libraries\MySQL Connector C++ 26.7\include;D:\Libraries\OpenSSL-Win64\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Libraries\MySQL Connector C++ 26.7\include\jdbc;D:\Libraries\MySQL Connector C++ 26.7\include;D:\Libraries\OpenSSL-Win64\include;D:\Libraries\curl-8.22.0_2-win64-mingw\include</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>D:\Libraries\MySQL Connector C++ 26.7\lib64\vs14;D:\Libraries\OpenSSL-Win64\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libcrypto.lib;libssl.lib;mysqlcppconn.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>D:\Libraries\MySQL Connector C++ 26.7\lib64\vs14;D:\Libraries\OpenSSL-Win64\lib;D:\Libraries\curl-8.22.0_2-win64-mingw\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libcrypto.lib;libssl.lib;mysqlcppconn.lib;libcurl.dll.a</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -135,14 +141,14 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>D:\Libraries\MySQL Connector C++ 26.7\include\jdbc;D:\Libraries\MySQL Connector C++ 26.7\include;D:\Libraries\OpenSSL-Win64\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Libraries\MySQL Connector C++ 26.7\include\jdbc;D:\Libraries\MySQL Connector C++ 26.7\include;D:\Libraries\OpenSSL-Win64\include;D:\Libraries\curl-8.22.0_2-win64-mingw\include</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>D:\Libraries\MySQL Connector C++ 26.7\lib64\vs14;D:\Libraries\OpenSSL-Win64\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libcrypto.lib;libssl.lib;mysqlcppconn.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>D:\Libraries\MySQL Connector C++ 26.7\lib64\vs14;D:\Libraries\OpenSSL-Win64\lib;D:\Libraries\curl-8.22.0_2-win64-mingw\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libcrypto.lib;libssl.lib;mysqlcppconn.lib;libcurl.dll.a</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>

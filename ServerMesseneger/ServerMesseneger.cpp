@@ -7,7 +7,6 @@
 
 int main()
 {
-    srand((unsigned)time(NULL));
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
 

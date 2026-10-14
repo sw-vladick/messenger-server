@@ -48,6 +48,9 @@ public:
 	bool EditMessage(int messageId, const std::string& senderUsername, const std::string& newText);
 
 	void MarkMessagesAsRead(const std::string& sender, const std::string& receiver);
+
+	bool IsUserVerified(const std::string& username);
+	void SetUserEmailVerified(const std::string& username, const std::string& email);
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;

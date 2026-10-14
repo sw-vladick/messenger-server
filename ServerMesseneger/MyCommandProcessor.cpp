@@ -1,5 +1,27 @@
 #include "MyCommandProcessor.h"
 
+struct EmailData {
+	std::string text;
+	size_t bytes_read;
+};
+
+static size_t payload_source(char* ptr, size_t size, size_t nmemb, void* userp) {
+	EmailData* emailData = (EmailData*)userp;
+	size_t room = size * nmemb;
+
+	if (room < 1 || emailData->bytes_read >= emailData->text.size()) {
+		return 0;
+	}
+
+	size_t bytes_left = emailData->text.size() - emailData->bytes_read;
+	size_t bytes_to_copy = (bytes_left < room) ? bytes_left : room;
+
+	memcpy(ptr, emailData->text.data() + emailData->bytes_read, bytes_to_copy);
+	emailData->bytes_read += bytes_to_copy;
+
+	return bytes_to_copy;
+}
+
 MyCommandProcessor::MyCommandProcessor(const std::string& db_master_key) : masterKey(db_master_key), dbManager(db_master_key)
 {
 	if (cryptoManager.LoadPrivateKey("private_key.pem")) {
@@ -22,6 +44,8 @@ MyCommandProcessor::MyCommandProcessor(const std::string& db_master_key) : maste
 	commands.emplace("FILE_CHUNK", [this](SOCKET currentSocket, const json& data) { HandleFileChunk(currentSocket, data); });
 	commands.emplace("FILE_END", [this](SOCKET currentSocket, const json& data) { HandleFileEnd(currentSocket, data); });
 	commands.emplace("DOWNLOAD_FILE", [this](SOCKET currentSocket, const json& data) { HandleDownloadFile(currentSocket, data); });
+	commands.emplace("SEND_VERIFICATION_CODE", [this](SOCKET currentSocket, const json& data) { HandleSendVerificationCode(currentSocket, data); });
+	commands.emplace("VERIFY_CODE", [this](SOCKET currentSocket, const json& data) { HandleVerifyCode(currentSocket, data); });
 
 	std::ifstream configFile("config.json");
 	if (!configFile.is_open()) {
@@ -36,6 +60,8 @@ MyCommandProcessor::MyCommandProcessor(const std::string& db_master_key) : maste
 	std::string user = config["user"];
 	std::string password = config["password"];
 	std::string database = config["database"];
+	senderEmail = config.value("email_sender", "");
+	senderPassword = config.value("email_password", "");
 
 	if (dbManager.Connect(host, user, password, database)) {
 		std::cout << "[СЕРВЕР] Успішно підключено до БД через config.json!" << std::endl;
@@ -112,6 +138,7 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 		if (loginResult == 1) {
 			response["status"] = "success";
 			loggedInUsers[currentSocket] = username;
+			response["is_verified"] = dbManager.IsUserVerified(username);
 			std::cout << "[СЕРВЕР] Успішна авторизація: " << username << std::endl;
 		}
 		else if (loginResult == -1) {
@@ -146,6 +173,7 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 		if (registerResult == 1) {
 			response["status"] = "success";
 			loggedInUsers[currentSocket] = username;
+			response["is_verified"] = false;
 			std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
 		}
 		else if (registerResult == -1) {
@@ -521,4 +549,168 @@ void MyCommandProcessor::RemoveClient(SOCKET currentSocket)
 	loggedInUsers.erase(currentSocket);
 	clientAesKeys.erase(currentSocket);
 	std::cout << "[СЕРВЕР] Дані сокета очищено з пам'яті." << std::endl;
+}
+
+bool MyCommandProcessor::SendEmail(const std::string& toAddress, const std::string& verificationCode)
+{
+	CURL* curl;
+	CURLcode res = CURLE_OK;
+
+	curl = curl_easy_init();
+	if (!curl) return false;
+
+	std::string emailPayload =
+		"To: " + toAddress + "\r\n"
+		"From: Messenger Security <" + senderEmail + ">\r\n"
+		"Subject: Verification Code for Messenger\r\n"
+		"\r\n"
+		"Your verification code is: " + verificationCode + "\r\n"
+		"This code is valid for 5 minutes.\r\n";
+
+	EmailData emailData;
+	emailData.text = emailPayload;
+	emailData.bytes_read = 0;
+
+	curl_easy_setopt(curl, CURLOPT_URL, "smtps://smtp.gmail.com:465");
+	curl_easy_setopt(curl, CURLOPT_USERNAME, senderEmail.c_str());
+	curl_easy_setopt(curl, CURLOPT_PASSWORD, senderPassword.c_str());
+	curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+
+	curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+	curl_easy_setopt(curl, CURLOPT_READFUNCTION, payload_source);
+	curl_easy_setopt(curl, CURLOPT_READDATA, &emailData);
+
+	curl_easy_setopt(curl, CURLOPT_MAIL_FROM, senderEmail.c_str());
+
+	struct curl_slist* recipients = NULL;
+	recipients = curl_slist_append(recipients, toAddress.c_str());
+	curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
+
+	res = curl_easy_perform(curl);
+
+	curl_slist_free_all(recipients);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK) {
+		std::cout << "[СЕРВЕР] Помилка відправки листа: " << curl_easy_strerror(res) << std::endl;
+		return false;
+	}
+
+	std::cout << "[СЕРВЕР] Лист успішно відправлено на " << toAddress << std::endl;
+	return true;
+}
+
+void MyCommandProcessor::HandleSendVerificationCode(SOCKET currentSocket, const json& data)
+{
+	json requestJson;
+	if (!DecryptRequest(currentSocket, data, requestJson)) return;
+
+	try
+	{
+		std::string email = requestJson.value("email", "");
+
+		if (emailLockouts.find(email) != emailLockouts.end()) {
+			if (std::chrono::steady_clock::now() < emailLockouts[email]) {
+				json responseInner;
+				responseInner["status"] = "locked";
+				SendEncryptedResponse(currentSocket, "SEND_VERIFICATION_CODE_RESPONSE", responseInner);
+				return;
+			}
+			else {
+				emailLockouts.erase(email);
+			}
+		}
+
+		unsigned char randomBytes[4];
+		if (RAND_bytes(randomBytes, sizeof(randomBytes)) != 1) {
+			std::cout << "[СЕРВЕР] ПОМИЛКА генерації випадкового коду!" << std::endl;
+			return;
+		}
+
+		unsigned int randomNum = *(unsigned int*)randomBytes;
+		int secureCode = 100000 + (randomNum % 900000);
+		std::string code = std::to_string(secureCode);
+
+		EmailVerificationSession session;
+		session.code = code;
+		session.expiresAt = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+		verificationCodes[email] = session;
+
+		json responseInner;
+
+		if (SendEmail(email, code)) {
+			responseInner["status"] = "success";
+		}
+		else {
+			responseInner["status"] = "error";
+		}
+		SendEncryptedResponse(currentSocket, "SEND_VERIFICATION_CODE_RESPONSE", responseInner);
+
+	}
+	catch (const std::exception& e) {
+		std::cout << "[СЕРВЕР] Стандартна помилка в SendVerificationCode: " << e.what() << std::endl;
+	}
+}
+
+void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data)
+{
+	json requestJson;
+	if (!DecryptRequest(currentSocket, data, requestJson)) return;
+
+	try
+	{
+		std::string email = requestJson.value("email", "");
+		std::string code = requestJson.value("code", "");
+		json responseInner;
+
+		if (emailLockouts.find(email) != emailLockouts.end()) {
+			if (std::chrono::steady_clock::now() < emailLockouts[email]) {
+				responseInner["status"] = "locked";
+				SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+				return;
+			}
+			else {
+				emailLockouts.erase(email);
+			}
+		}
+
+		if (verificationCodes.find(email) == verificationCodes.end()) {
+			responseInner["status"] = "error";
+			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+			return;
+		}
+
+		if (std::chrono::steady_clock::now() > verificationCodes[email].expiresAt) {
+			verificationCodes.erase(email);
+			responseInner["status"] = "error";
+			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+			return;
+		}
+
+		if (verificationCodes[email].code == code) {
+			std::string currentUser = loggedInUsers[currentSocket];
+			dbManager.SetUserEmailVerified(currentUser, email);
+
+			verificationCodes.erase(email);
+			responseInner["status"] = "success";
+			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+		}
+		else {
+			verificationCodes[email].failedAttempts++;
+
+			if (verificationCodes[email].failedAttempts >= 5) {
+				emailLockouts[email] = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+				verificationCodes.erase(email);
+				responseInner["status"] = "locked";
+			}
+			else {
+				responseInner["status"] = "error";
+			}
+
+			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+		}
+	}
+	catch (const std::exception& e) {
+		std::cout << "[СЕРВЕР] Стандартна помилка в VERIFY_CODE_RESPONSE: " << e.what() << std::endl;
+	}
 }
