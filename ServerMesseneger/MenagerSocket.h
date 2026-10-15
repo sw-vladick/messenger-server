@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include "MyCommandProcessor.h"
 #pragma comment(lib,"ws2_32.lib")
 
@@ -28,7 +29,7 @@ private:
 	SOCKET serverSocket;
 	WSAControl wsadata;
 	Client** clients;
-	int currentCountClient;
+	std::atomic<int> currentCountClient;
 	std::mutex acceptMTX;
 	int maxClients;
 	MyCommandProcessor RouteMap;

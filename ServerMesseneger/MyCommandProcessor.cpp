@@ -5,6 +5,11 @@ struct EmailData {
 	size_t bytes_read;
 };
 
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+	((std::string*)userp)->append((char*)contents, size * nmemb);
+	return size * nmemb;
+}
+
 static size_t payload_source(char* ptr, size_t size, size_t nmemb, void* userp) {
 	EmailData* emailData = (EmailData*)userp;
 	size_t room = size * nmemb;
@@ -46,6 +51,7 @@ MyCommandProcessor::MyCommandProcessor(const std::string& db_master_key) : maste
 	commands.emplace("DOWNLOAD_FILE", [this](SOCKET currentSocket, const json& data) { HandleDownloadFile(currentSocket, data); });
 	commands.emplace("SEND_VERIFICATION_CODE", [this](SOCKET currentSocket, const json& data) { HandleSendVerificationCode(currentSocket, data); });
 	commands.emplace("VERIFY_CODE", [this](SOCKET currentSocket, const json& data) { HandleVerifyCode(currentSocket, data); });
+	commands.emplace("GOOGLE_LOGIN", [this](SOCKET currentSocket, const json& data) { HandleGoogleLogin(currentSocket, data); });
 
 	std::ifstream configFile("config.json");
 	if (!configFile.is_open()) {
@@ -62,6 +68,8 @@ MyCommandProcessor::MyCommandProcessor(const std::string& db_master_key) : maste
 	std::string database = config["database"];
 	senderEmail = config.value("email_sender", "");
 	senderPassword = config.value("email_password", "");
+	client_id = config.value("google_client_id", "");
+	client_secret = config.value("google_client_secret", "");
 
 	if (dbManager.Connect(host, user, password, database)) {
 		std::cout << "[СЕРВЕР] Успішно підключено до БД через config.json!" << std::endl;
@@ -83,14 +91,20 @@ void MyCommandProcessor::Execute(std::string command, SOCKET currentSocket, cons
 
 bool MyCommandProcessor::DecryptRequest(SOCKET currentSocket, const json& data, json& outRequest)
 {
-	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return false;
+	std::string aesKey;
+	{
+		std::lock_guard<std::mutex> lock(processorMutex);
+		if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return false;
+		aesKey = clientAesKeys[currentSocket];
+	}
 
 	std::string payload = data.value("payload", "");
 	std::string decryptedPayload = cryptoManager.Base64Decode(payload);
-	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, clientAesKeys[currentSocket]);
+	std::string strJson = cryptoManager.DecryptAES(decryptedPayload, aesKey);
 
 	if (strJson.empty()) {
 		std::cout << "[СЕРВЕР] Отримано битий пакет, ігноруємо." << std::endl;
+		dbManager.LogActivity(GetIp(currentSocket), "MALFORMED_PAYLOAD", GetIp(currentSocket));
 		return false;
 	}
 
@@ -106,10 +120,15 @@ bool MyCommandProcessor::DecryptRequest(SOCKET currentSocket, const json& data, 
 
 void MyCommandProcessor::SendEncryptedResponse(SOCKET currentSocket, const std::string& commandName, const json& innerPayload)
 {
-	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return;
+	std::string aesKey;
+	{
+		std::lock_guard<std::mutex> lock(processorMutex);
+		if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return;
+		aesKey = clientAesKeys[currentSocket];
+	}
 
 	std::string innerString = innerPayload.dump();
-	std::string encryptedInner = cryptoManager.EncryptAES(innerString, clientAesKeys[currentSocket]);
+	std::string encryptedInner = cryptoManager.EncryptAES(innerString, aesKey);
 	std::string encodedPayload = cryptoManager.Base64Encode(encryptedInner);
 
 	json finalResponse;
@@ -137,17 +156,23 @@ void MyCommandProcessor::HandleLogin(SOCKET currentSocket, const json& data)
 
 		if (loginResult == 1) {
 			response["status"] = "success";
-			loggedInUsers[currentSocket] = username;
+			{
+				std::lock_guard<std::mutex> lock(processorMutex);
+				loggedInUsers[currentSocket] = username;
+			}
 			response["is_verified"] = dbManager.IsUserVerified(username);
 			std::cout << "[СЕРВЕР] Успішна авторизація: " << username << std::endl;
+			dbManager.LogActivity(username, "LOGIN_SUCCESS", GetIp(currentSocket));
 		}
 		else if (loginResult == -1) {
 			response["status"] = "locked";
 			std::cout << "[СЕРВЕР] Блокування (перевищено ліміт): " << username << std::endl;
+			dbManager.LogActivity(username, "LOGIN_LOCKED", GetIp(currentSocket));
 		}
 		else {
 			response["status"] = "error";
 			std::cout << "[СЕРВЕР] Помилка авторизації: " << username << std::endl;
+			dbManager.LogActivity(username, "LOGIN_FAILED", GetIp(currentSocket));
 		}
 	}
 	catch (const std::exception& e) {
@@ -172,17 +197,23 @@ void MyCommandProcessor::HandlRegistration(SOCKET currentSocket, const json& dat
 
 		if (registerResult == 1) {
 			response["status"] = "success";
-			loggedInUsers[currentSocket] = username;
+			{
+				std::lock_guard<std::mutex> lock(processorMutex);
+				loggedInUsers[currentSocket] = username;
+			}
 			response["is_verified"] = false;
 			std::cout << "[СЕРВЕР] Успішна реєстрація: " << username << std::endl;
+			dbManager.LogActivity(username, "REGISTER_SUCCESS", GetIp(currentSocket));
 		}
 		else if (registerResult == -1) {
 			response["status"] = "locked";
 			std::cout << "[СЕРВЕР] Блокування (перевищено ліміт): " << username << std::endl;
+			dbManager.LogActivity(username, "REGISTER_LOCKED", GetIp(currentSocket));
 		}
 		else {
 			response["status"] = "error";
 			std::cout << "[СЕРВЕР] Помилка реєстрації (логін зайнятий): " << username << std::endl;
+			dbManager.LogActivity(username, "REGISTER_FAILED", GetIp(currentSocket));
 		}
 	}
 	catch (const std::exception& e) {
@@ -204,7 +235,10 @@ void MyCommandProcessor::HandleHandshake(SOCKET currentSocket, const json& data)
 		std::cout << "[СЕРВЕР] Помилка розшифрування хендшейку!" << std::endl;
 	}
 	else {
-		clientAesKeys[currentSocket] = result_key;
+    {
+        std::lock_guard<std::mutex> lock(processorMutex);
+        clientAesKeys[currentSocket] = result_key;
+    }
 		response["status"] = "ready";
 		std::cout << "[СЕРВЕР] Хендшейк успішний, AES ключ збережено!" << std::endl;
 	}
@@ -230,7 +264,8 @@ void MyCommandProcessor::HandleGetChatHistory(SOCKET currentSocket, const json& 
 
 	try {
 		std::string targetUser = requestJson.value("target_user", "");
-		std::string currentUser = loggedInUsers[currentSocket];
+		std::string currentUser;
+		if (!GetLoggedUser(currentSocket, currentUser)) return;
 
 		dbManager.MarkMessagesAsRead(targetUser, currentUser);
 		std::vector<ChatMessage> messages = dbManager.GetChatHistory(currentUser, targetUser);
@@ -268,7 +303,8 @@ void MyCommandProcessor::HandleSendMessage(SOCKET currentSocket, const json& dat
 
 	try {
 		std::string targetUser = requestJson.value("target_user", "");
-		std::string currentUser = loggedInUsers[currentSocket];
+		std::string currentUser;
+		if (!GetLoggedUser(currentSocket, currentUser)) return;
 		std::string text = requestJson.value("text", "");
 
 		std::string encryptedTextForDB = cryptoManager.EncryptAES(text, masterKey);
@@ -280,11 +316,18 @@ void MyCommandProcessor::HandleSendMessage(SOCKET currentSocket, const json& dat
 
 			SendEncryptedResponse(currentSocket, "UPDATE_CHAT", response);
 
-			for (const auto& a : loggedInUsers) {
-				if (a.second == targetUser) {
-					SendEncryptedResponse(a.first, "UPDATE_CHAT", response);
-					break;
+			SOCKET targetSocket = INVALID_SOCKET;
+			{
+				std::lock_guard<std::mutex> lock(processorMutex);
+				for (const auto& a : loggedInUsers) {
+					if (a.second == targetUser) {
+						targetSocket = a.first;
+						break;
+					}
 				}
+			}
+			if (targetSocket != INVALID_SOCKET) {
+				SendEncryptedResponse(targetSocket, "UPDATE_CHAT", response);
 			}
 		}
 	}
@@ -298,7 +341,8 @@ void MyCommandProcessor::HandleGetRecentChats(SOCKET currentSocket, const json& 
 	if (clientAesKeys.find(currentSocket) == clientAesKeys.end()) return;
 
 	try {
-		std::string currentUser = loggedInUsers[currentSocket];
+		std::string currentUser;
+		if (!GetLoggedUser(currentSocket, currentUser)) return;
 		std::vector<std::string> chats = dbManager.GetRecentChats(currentUser);
 
 		json response;
@@ -323,7 +367,8 @@ void MyCommandProcessor::HandleEditMessage(SOCKET currentSocket, const json& dat
 	try {
 		int messageId = requestJson.value("message_id", -1);
 		std::string targetUser = requestJson.value("target_user", "");
-		std::string currentUser = loggedInUsers[currentSocket];
+		std::string currentUser;
+		if (!GetLoggedUser(currentSocket, currentUser)) return;
 		std::string text = requestJson.value("text", "");
 
 		if (messageId == -1 || text.empty()) return;
@@ -337,11 +382,18 @@ void MyCommandProcessor::HandleEditMessage(SOCKET currentSocket, const json& dat
 
 			SendEncryptedResponse(currentSocket, "UPDATE_CHAT", response);
 
-			for (const auto& a : loggedInUsers) {
-				if (a.second == targetUser) {
-					SendEncryptedResponse(a.first, "UPDATE_CHAT", response);
-					break;
+			SOCKET targetSocket = INVALID_SOCKET;
+			{
+				std::lock_guard<std::mutex> lock(processorMutex);
+				for (const auto& a : loggedInUsers) {
+					if (a.second == targetUser) {
+						targetSocket = a.first;
+						break;
+					}
 				}
+			}
+			if (targetSocket != INVALID_SOCKET) {
+				SendEncryptedResponse(targetSocket, "UPDATE_CHAT", response);
 			}
 		}
 	}
@@ -355,15 +407,22 @@ void MyCommandProcessor::HandleFileStart(SOCKET currentSocket, const json& data)
 	json requestJson;
 	if (!DecryptRequest(currentSocket, data, requestJson)) return;
 
+	std::string currentUser;
+	if (!GetLoggedUser(currentSocket, currentUser)) return;
+
 	try {
 		std::string transferId = requestJson.value("transfer_id", "");
 		std::string targetUser = requestJson.value("target_user", "");
-		std::string fileName = requestJson.value("file_name", "");
+		std::string rawFileName = requestJson.value("file_name", "");
+
+		std::string safeFileName = std::filesystem::path(rawFileName).filename().string();
+		if (safeFileName.empty() || transferId.empty()) return;
 
 		FileTransferSession currentSession;
-		currentSession.fileName = fileName;
+		currentSession.fileName = safeFileName;
 		currentSession.targetUser = targetUser;
 
+		std::lock_guard<std::mutex> lock(processorMutex);
 		memoryForFile[transferId] = currentSession;
 	}
 	catch (const std::exception& e) {
@@ -379,10 +438,20 @@ void MyCommandProcessor::HandleFileChunk(SOCKET currentSocket, const json& data)
 	try {
 		std::string transferId = requestJson.value("transfer_id", "");
 		std::string dataFile = requestJson.value("data", "");
-
 		std::string decodeDataFile = cryptoManager.Base64Decode(dataFile);
-		auto& sessionBuffer = memoryForFile[transferId].buffer;
-		sessionBuffer.insert(sessionBuffer.end(), decodeDataFile.begin(), decodeDataFile.end());
+
+		std::lock_guard<std::mutex> lock(processorMutex);
+		auto it = memoryForFile.find(transferId);
+		if (it == memoryForFile.end()) return;
+
+		const size_t MAX_FILE_SIZE = 50 * 1024 * 1024;
+		if (it->second.buffer.size() + decodeDataFile.size() > MAX_FILE_SIZE) {
+			std::cout << "[СЕРВЕР] Перевищено ліміт розміру файлу (50 МБ)! Сесію скасовано." << std::endl;
+			memoryForFile.erase(it);
+			return;
+		}
+
+		it->second.buffer.insert(it->second.buffer.end(), decodeDataFile.begin(), decodeDataFile.end());
 	}
 	catch (const std::exception& e) {
 		std::cout << "[СЕРВЕР] Помилка в FileChunk: " << e.what() << std::endl;
@@ -394,41 +463,59 @@ void MyCommandProcessor::HandleFileEnd(SOCKET currentSocket, const json& data)
 	json requestJson;
 	if (!DecryptRequest(currentSocket, data, requestJson)) return;
 
+	std::string currentUser;
+	if (!GetLoggedUser(currentSocket, currentUser)) return;
+
 	try {
 		std::string transferId = requestJson.value("transfer_id", "");
 		std::string targetUser = requestJson.value("target_user", "");
 
-		FileTransferSession& session = memoryForFile[transferId];
+		FileTransferSession session;
+		{
+			std::lock_guard<std::mutex> lock(processorMutex);
+			auto it = memoryForFile.find(transferId);
+			if (it == memoryForFile.end()) return;
+			session = std::move(it->second);
+			memoryForFile.erase(it);
+		}
 
-		std::ofstream fout(session.fileName, std::ios::binary);
+		std::filesystem::create_directories("uploads");
+		std::string safePath = "uploads/" + session.fileName;
+
+		std::ofstream fout(safePath, std::ios::binary);
 		if (fout.is_open()) {
 			fout.write(reinterpret_cast<const char*>(session.buffer.data()), session.buffer.size());
 			fout.close();
-			std::cout << "[СЕРВЕР] Файл успішно збережено: " << session.fileName << std::endl;
+			std::cout << "[СЕРВЕР] Файл успішно збережено: " << safePath << std::endl;
 
 			std::string fileMessageText = "[FILE] " + session.fileName;
 			std::string encryptedTextForDB = cryptoManager.EncryptAES(fileMessageText, masterKey);
 			std::string base64ForDB = cryptoManager.Base64Encode(encryptedTextForDB);
 
-			if (dbManager.SaveMessage(loggedInUsers[currentSocket], targetUser, base64ForDB)) {
+			if (dbManager.SaveMessage(currentUser, targetUser, base64ForDB)) {
 				json response;
 				response["status"] = "success";
 
 				SendEncryptedResponse(currentSocket, "UPDATE_CHAT", response);
 
-				for (const auto& a : loggedInUsers) {
-					if (a.second == targetUser) {
-						SendEncryptedResponse(a.first, "UPDATE_CHAT", response);
-						break;
+				SOCKET targetSocket = INVALID_SOCKET;
+				{
+					std::lock_guard<std::mutex> lock(processorMutex);
+					for (const auto& a : loggedInUsers) {
+						if (a.second == targetUser) {
+							targetSocket = a.first;
+							break;
+						}
 					}
+				}
+				if (targetSocket != INVALID_SOCKET) {
+					SendEncryptedResponse(targetSocket, "UPDATE_CHAT", response);
 				}
 			}
 		}
 		else {
-			std::cout << "[СЕРВЕР] ПОМИЛКА: Не вдалося створити файл " << session.fileName << std::endl;
+			std::cout << "[СЕРВЕР] ПОМИЛКА: Не вдалося створити файл " << safePath << std::endl;
 		}
-
-		memoryForFile.erase(transferId);
 	}
 	catch (const std::exception& e) {
 		std::cout << "[СЕРВЕР] Помилка в FileEnd: " << e.what() << std::endl;
@@ -440,20 +527,29 @@ void MyCommandProcessor::HandleDownloadFile(SOCKET currentSocket, const json& da
 	json requestJson;
 	if (!DecryptRequest(currentSocket, data, requestJson)) return;
 
+	std::string currentUser;
+	if (!GetLoggedUser(currentSocket, currentUser)) return;
+
 	try {
-		std::string fileName = requestJson.value("file_name", "");
-		std::ifstream file(fileName, std::ios::binary);
+		std::string rawFileName = requestJson.value("file_name", "");
+		std::string safeFileName = std::filesystem::path(rawFileName).filename().string();
+		if (safeFileName.empty()) return;
+
+		std::string safePath = "uploads/" + safeFileName;
+		std::ifstream file(safePath, std::ios::binary);
 
 		if (file.is_open()) {
 			file.seekg(0, std::ios::end);
-			int fileSize = file.tellg();
+			int fileSize = static_cast<int>(file.tellg());
 			file.seekg(0, std::ios::beg);
 
-			std::string transferId = std::to_string(rand()) + "_" + fileName;
+			unsigned int randomId = 0;
+			RAND_bytes(reinterpret_cast<unsigned char*>(&randomId), sizeof(randomId));
+			std::string transferId = std::to_string(randomId) + "_" + safeFileName;
 
 			json responseStart;
 			responseStart["transfer_id"] = transferId;
-			responseStart["file_name"] = fileName;
+			responseStart["file_name"] = safeFileName;
 			responseStart["file_size"] = fileSize;
 			SendEncryptedResponse(currentSocket, "FILE_RECEIVE_START", responseStart);
 
@@ -462,7 +558,7 @@ void MyCommandProcessor::HandleDownloadFile(SOCKET currentSocket, const json& da
 
 			while (!file.eof()) {
 				file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-				int bytesRead = file.gcount();
+				int bytesRead = static_cast<int>(file.gcount());
 				if (bytesRead == 0) break;
 
 				std::string rawData(reinterpret_cast<char*>(buffer.data()), bytesRead);
@@ -482,10 +578,10 @@ void MyCommandProcessor::HandleDownloadFile(SOCKET currentSocket, const json& da
 			responseEnd["transfer_id"] = transferId;
 			SendEncryptedResponse(currentSocket, "FILE_RECEIVE_END", responseEnd);
 
-			std::cout << "[СЕРВЕР] Відправлено файл: " << fileName << " (" << chunkIndex << " шматків)" << std::endl;
+			std::cout << "[СЕРВЕР] Відправлено файл: " << safeFileName << " (" << chunkIndex << " шматків)" << std::endl;
 		}
 		else {
-			std::cout << "[СЕРВЕР] Помилка: не знайдено файл " << fileName << std::endl;
+			std::cout << "[СЕРВЕР] Помилка: не знайдено файл " << safePath << std::endl;
 		}
 	}
 	catch (const std::exception& e) {
@@ -500,7 +596,8 @@ void MyCommandProcessor::HandleSearchUser(SOCKET currentSocket, const json& data
 
 	try {
 		std::string targetQuery = requestJson.value("username", "");
-		std::string currentUsername = loggedInUsers[currentSocket];
+		std::string currentUser;
+		if (!GetLoggedUser(currentSocket, currentUser)) return;
 
 		std::vector<std::string> foundUsers = dbManager.SearchUsers(targetQuery);
 		std::vector<std::string> filteredUsers;
@@ -525,9 +622,17 @@ void MyCommandProcessor::HandleSearchUser(SOCKET currentSocket, const json& data
 
 void MyCommandProcessor::HandleLogout(SOCKET currentSocket, const json& data)
 {
-	if (loggedInUsers.find(currentSocket) != loggedInUsers.end()) {
-		std::cout << "[СЕРВЕР] Користувач " << loggedInUsers[currentSocket] << " безпечно вийшов з акаунту." << std::endl;
-		loggedInUsers.erase(currentSocket);
+	std::string user;
+	{
+		std::lock_guard<std::mutex> lock(processorMutex);
+		if (loggedInUsers.find(currentSocket) != loggedInUsers.end()) {
+			user = loggedInUsers[currentSocket];
+			loggedInUsers.erase(currentSocket);
+		}
+	}
+	if (!user.empty()) {
+		std::cout << "[СЕРВЕР] Користувач " << user << " безпечно вийшов з акаунту." << std::endl;
+		dbManager.LogActivity(user, "LOGOUT", GetIp(currentSocket));
 	}
 }
 
@@ -546,10 +651,21 @@ std::string MyCommandProcessor::GetIp(SOCKET currentSocket)
 
 void MyCommandProcessor::RemoveClient(SOCKET currentSocket)
 {
-	loggedInUsers.erase(currentSocket);
-	clientAesKeys.erase(currentSocket);
+	std::string user;
+	{
+		std::lock_guard<std::mutex> lock(processorMutex);
+		if (loggedInUsers.find(currentSocket) != loggedInUsers.end()) {
+			user = loggedInUsers[currentSocket];
+		}
+		loggedInUsers.erase(currentSocket);
+		clientAesKeys.erase(currentSocket);
+	}
+	if (!user.empty()) {
+		dbManager.LogActivity(user, "DISCONNECTED", GetIp(currentSocket));
+	}
 	std::cout << "[СЕРВЕР] Дані сокета очищено з пам'яті." << std::endl;
 }
+
 
 bool MyCommandProcessor::SendEmail(const std::string& toAddress, const std::string& verificationCode)
 {
@@ -607,6 +723,7 @@ void MyCommandProcessor::HandleSendVerificationCode(SOCKET currentSocket, const 
 
 	try
 	{
+		std::unique_lock<std::mutex> lock(processorMutex);
 		std::string email = requestJson.value("email", "");
 
 		if (emailLockouts.find(email) != emailLockouts.end()) {
@@ -614,6 +731,7 @@ void MyCommandProcessor::HandleSendVerificationCode(SOCKET currentSocket, const 
 				json responseInner;
 				responseInner["status"] = "locked";
 				SendEncryptedResponse(currentSocket, "SEND_VERIFICATION_CODE_RESPONSE", responseInner);
+				dbManager.LogActivity(email, "SEND_CODE_LOCKED", GetIp(currentSocket));
 				return;
 			}
 			else {
@@ -627,7 +745,11 @@ void MyCommandProcessor::HandleSendVerificationCode(SOCKET currentSocket, const 
 			return;
 		}
 
-		unsigned int randomNum = *(unsigned int*)randomBytes;
+		unsigned int randomNum = 0;
+		if (RAND_bytes(reinterpret_cast<unsigned char*>(&randomNum), sizeof(randomNum)) != 1) {
+			std::cout << "[СЕРВЕР] ПОМИЛКА генерації випадкового коду!" << std::endl;
+			return;
+		}
 		int secureCode = 100000 + (randomNum % 900000);
 		std::string code = std::to_string(secureCode);
 
@@ -635,14 +757,17 @@ void MyCommandProcessor::HandleSendVerificationCode(SOCKET currentSocket, const 
 		session.code = code;
 		session.expiresAt = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 		verificationCodes[email] = session;
+		lock.unlock();
 
 		json responseInner;
 
 		if (SendEmail(email, code)) {
 			responseInner["status"] = "success";
+			dbManager.LogActivity(email, "SEND_CODE_SUCCESS", GetIp(currentSocket));
 		}
 		else {
 			responseInner["status"] = "error";
+			dbManager.LogActivity(email, "SEND_CODE_FAILED", GetIp(currentSocket));
 		}
 		SendEncryptedResponse(currentSocket, "SEND_VERIFICATION_CODE_RESPONSE", responseInner);
 
@@ -659,6 +784,7 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 
 	try
 	{
+		std::lock_guard<std::mutex> lock(processorMutex);
 		std::string email = requestJson.value("email", "");
 		std::string code = requestJson.value("code", "");
 		json responseInner;
@@ -677,6 +803,7 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 		if (verificationCodes.find(email) == verificationCodes.end()) {
 			responseInner["status"] = "error";
 			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+			dbManager.LogActivity(email, "VERIFY_CODE_NOT_FOUND", GetIp(currentSocket));
 			return;
 		}
 
@@ -684,6 +811,7 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 			verificationCodes.erase(email);
 			responseInner["status"] = "error";
 			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+			dbManager.LogActivity(email, "VERIFY_CODE_EXPIRED", GetIp(currentSocket));
 			return;
 		}
 
@@ -694,6 +822,8 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 			verificationCodes.erase(email);
 			responseInner["status"] = "success";
 			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
+
+			dbManager.LogActivity(currentUser, "EMAIL_VERIFIED", GetIp(currentSocket));
 		}
 		else {
 			verificationCodes[email].failedAttempts++;
@@ -702,9 +832,11 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 				emailLockouts[email] = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 				verificationCodes.erase(email);
 				responseInner["status"] = "locked";
+				dbManager.LogActivity(email, "EMAIL_VERIFY_LOCKED", GetIp(currentSocket));
 			}
 			else {
 				responseInner["status"] = "error";
+				dbManager.LogActivity(email, "EMAIL_VERIFY_FAILED", GetIp(currentSocket));
 			}
 
 			SendEncryptedResponse(currentSocket, "VERIFY_CODE_RESPONSE", responseInner);
@@ -712,5 +844,132 @@ void MyCommandProcessor::HandleVerifyCode(SOCKET currentSocket, const json& data
 	}
 	catch (const std::exception& e) {
 		std::cout << "[СЕРВЕР] Стандартна помилка в VERIFY_CODE_RESPONSE: " << e.what() << std::endl;
+	}
+}
+
+void MyCommandProcessor::HandleGoogleLogin(SOCKET currentSocket, const json& data)
+{
+	json requestJson;
+	if (!DecryptRequest(currentSocket, data, requestJson)) return;
+
+	try
+	{
+		std::string code = requestJson.value("code", "");
+
+		std::string token = ExchangeGoogleCodeForToken(code);
+
+		json responseInner;
+		if (token.empty()) {
+			responseInner["status"] = "error";
+			SendEncryptedResponse(currentSocket, "GOOGLE_LOGIN_RESPONSE", responseInner);
+			dbManager.LogActivity("Unknown", "GOOGLE_TOKEN_ERROR", GetIp(currentSocket));
+			return;
+		}
+
+		json userInfo = GetGoogleUserInfo(token);
+
+		std::string email = userInfo.value("email", "");
+		std::string id = userInfo.value("id", "");
+		std::string username;
+
+		if (email.empty() || id.empty()) {
+			responseInner["status"] = "error";
+			SendEncryptedResponse(currentSocket, "GOOGLE_LOGIN_RESPONSE", responseInner);
+			dbManager.LogActivity("Unknown", "GOOGLE_DATA_MISSING", GetIp(currentSocket));
+			return;
+		}
+
+		if (dbManager.LoginOrRegisterGoogleUser(email, id, username)) {
+			{
+				std::lock_guard<std::mutex> lock(processorMutex);
+				loggedInUsers[currentSocket] = username;
+			}
+
+			responseInner["status"] = "success";
+			SendEncryptedResponse(currentSocket, "GOOGLE_LOGIN_RESPONSE", responseInner);
+			dbManager.LogActivity(username, "GOOGLE_LOGIN_SUCCESS", GetIp(currentSocket));
+		}
+		else {
+			responseInner["status"] = "error";
+			SendEncryptedResponse(currentSocket, "GOOGLE_LOGIN_RESPONSE", responseInner);
+			dbManager.LogActivity(email, "GOOGLE_LOGIN_FAILED", GetIp(currentSocket));
+		}
+	}
+	catch (const std::exception& e) {
+		std::cout << "[СЕРВЕР] Стандартна помилка в HandleGoogleLogin: " << e.what() << std::endl;
+	}
+}
+
+bool MyCommandProcessor::GetLoggedUser(SOCKET currentSocket, std::string& outUsername)
+{
+	std::lock_guard<std::mutex> lock(processorMutex);
+	auto it = loggedInUsers.find(currentSocket);
+	if (it == loggedInUsers.end() || it->second.empty()) {
+		return false;
+	}
+	outUsername = it->second;
+	return true;
+}
+
+std::string MyCommandProcessor::ExchangeGoogleCodeForToken(const std::string& code) {
+	CURL* curl = curl_easy_init();
+	if (!curl) return "";
+
+	std::string response_string;
+
+	std::string post_fields = "code=" + code +
+		"&client_id=" + client_id +
+		"&client_secret=" + client_secret +
+		"&redirect_uri=http://127.0.0.1" +
+		"&grant_type=authorization_code";
+
+	curl_easy_setopt(curl, CURLOPT_URL, "https://oauth2.googleapis.com/token");
+	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_fields.c_str());
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+
+	CURLcode res = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK) {
+		std::cout << "[OAUTH] Помилка запиту токена: " << curl_easy_strerror(res) << std::endl;
+		return "";
+	}
+
+	try {
+		json jsonResponse = json::parse(response_string);
+		return jsonResponse.value("access_token", "");
+	}
+	catch (...) {
+		return "";
+	}
+}
+
+json MyCommandProcessor::GetGoogleUserInfo(const std::string& accessToken) {
+	CURL* curl = curl_easy_init();
+	if (!curl) return json();
+
+	std::string response_string;
+	struct curl_slist* headers = NULL;
+	headers = curl_slist_append(headers, ("Authorization: Bearer " + accessToken).c_str());
+
+	curl_easy_setopt(curl, CURLOPT_URL, "https://www.googleapis.com/oauth2/v2/userinfo");
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_string);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+
+	CURLcode res = curl_easy_perform(curl);
+	curl_slist_free_all(headers);
+	curl_easy_cleanup(curl);
+
+	if (res != CURLE_OK) return json();
+
+	try {
+		return json::parse(response_string);
+	}
+	catch (...) {
+		return json();
 	}
 }

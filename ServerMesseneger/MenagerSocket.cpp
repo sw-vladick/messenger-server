@@ -150,6 +150,14 @@ void MenagerSocket::HandleSocket(Client& currentClient, int index)
 MenagerSocket::~MenagerSocket()
 {
 	closesocket(serverSocket);
+	if (clients != nullptr) {
+		for (int i = 0; i < maxClients; i++) {
+			if (clients[i] != nullptr) {
+				delete clients[i];
+			}
+		}
+		delete[] clients;
+	}
 }
 
 Client::Client()

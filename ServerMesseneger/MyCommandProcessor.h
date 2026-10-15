@@ -9,6 +9,8 @@
 #include <WS2tcpip.h>
 #include "DatabaseManager.h"
 #include <chrono>
+#include <mutex>
+#include <filesystem>
 #include "CryptoManager.h"
 #include <curl/curl.h>
 
@@ -39,6 +41,10 @@ private:
 	bool SendEmail(const std::string& toAddress, const std::string& verificationCode);
 	void HandleSendVerificationCode(SOCKET currentSocket, const json& data);
 	void HandleVerifyCode(SOCKET currentSocket, const json& data);
+	void HandleGoogleLogin(SOCKET currentSocket, const json& data);
+	bool GetLoggedUser(SOCKET currentSocket, std::string& outUsername);
+	std::string ExchangeGoogleCodeForToken(const std::string& code);
+	json GetGoogleUserInfo(const std::string& accessToken);
 	std::string GetIp(SOCKET currentSocket);
 
 	std::unordered_map<std::string, std::function<void(SOCKET, const json&)>> commands;
@@ -66,5 +72,8 @@ private:
 	std::unordered_map<std::string, std::chrono::steady_clock::time_point> emailLockouts;
 	std::string senderEmail;
 	std::string senderPassword;
+	std::string client_id;
+	std::string client_secret;
+	std::mutex processorMutex;
 };
 

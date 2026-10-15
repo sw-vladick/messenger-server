@@ -55,19 +55,33 @@ int DatabaseManager::RegisterUser(const std::string& username, const std::string
         std::string password_hash = hashPassword(password, salt);
         try
         {
-            sql::PreparedStatement* pstmt = con->prepareStatement("INSERT INTO Users(username,password_hash,salt) VALUES (?,?,?)");
+            sql::PreparedStatement* pstmt1 = con->prepareStatement("INSERT INTO Users(username, is_verified) VALUES (?, 0)");
+            pstmt1->setString(1, username);
+            pstmt1->executeUpdate();
+            delete pstmt1;
 
-            pstmt->setString(1, username);
-            pstmt->setString(2, password_hash);
-            pstmt->setString(3, salt);
+            sql::Statement* stmt = con->createStatement();
+            sql::ResultSet* res = stmt->executeQuery("SELECT LAST_INSERT_ID() AS id");
+            int newUserId = -1;
+            if (res->next()) {
+                newUserId = res->getInt("id");
+            }
+            delete res;
+            delete stmt;
 
-            pstmt->executeUpdate();
-            delete pstmt;
-            status = 1;
+            if (newUserId != -1) {
+                sql::PreparedStatement* pstmt2 = con->prepareStatement("INSERT INTO Auth_Local(user_id, password_hash, salt) VALUES (?, ?, ?)");
+                pstmt2->setInt(1, newUserId);
+                pstmt2->setString(2, password_hash);
+                pstmt2->setString(3, salt);
+                pstmt2->executeUpdate();
+                delete pstmt2;
+                status = 1;
+            }
         }
         catch (sql::SQLException& e)
         {
-            std::cout << e.what() << std::endl;
+            std::cout << "[DB ERROR RegisterUser]: " << e.what() << std::endl;
             status = 0;
         }
     }
@@ -84,7 +98,13 @@ int DatabaseManager::LoginUser(const std::string& username, const std::string& p
     try
     {
         std::lock_guard<std::mutex> lock(dbMutex);
-        sql::PreparedStatement* pstmt = con->prepareStatement("SELECT salt, password_hash FROM Users WHERE username = ?");
+
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "SELECT u.id, a.password_hash, a.salt "
+            "FROM Users u "
+            "JOIN Auth_Local a ON u.id = a.user_id "
+            "WHERE u.username = ?"
+        );
         pstmt->setString(1, username);
         sql::ResultSet* res = pstmt->executeQuery();
 
@@ -101,7 +121,7 @@ int DatabaseManager::LoginUser(const std::string& username, const std::string& p
         delete pstmt;
     }
     catch (sql::SQLException& e) {
-        std::cout << e.what() << std::endl;
+        std::cout << "[DB ERROR LoginUser]: " << e.what() << std::endl;
         status = 0;
     }
 
@@ -415,5 +435,120 @@ void DatabaseManager::SetUserEmailVerified(const std::string& username, const st
     }
     catch (sql::SQLException& e) {
         std::cout << "[DB ERROR] Помилка IsUserVerified: " << e.what() << std::endl;
+    }
+}
+
+bool DatabaseManager::LoginOrRegisterGoogleUser(const std::string& email, const std::string& googleId, std::string& outUsername)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+
+        sql::PreparedStatement* pstmtCheck = con->prepareStatement(
+            "SELECT u.username FROM Auth_Google ag "
+            "JOIN Users u ON ag.user_id = u.id "
+            "WHERE ag.google_id = ?"
+        );
+        pstmtCheck->setString(1, googleId);
+        sql::ResultSet* resCheck = pstmtCheck->executeQuery();
+
+        if (resCheck->next()) {
+            outUsername = resCheck->getString("username");
+            delete resCheck;
+            delete pstmtCheck;
+            return true;
+        }
+        delete resCheck;
+        delete pstmtCheck;
+
+        sql::PreparedStatement* pstmtEmailCheck = con->prepareStatement("SELECT id, username FROM Users WHERE email = ?");
+        pstmtEmailCheck->setString(1, email);
+        sql::ResultSet* resEmail = pstmtEmailCheck->executeQuery();
+
+        int existingUserId = -1;
+        if (resEmail->next()) {
+            existingUserId = resEmail->getInt("id");
+            outUsername = resEmail->getString("username");
+        }
+        delete resEmail;
+        delete pstmtEmailCheck;
+
+        if (existingUserId != -1) {
+            sql::PreparedStatement* pstmtLink = con->prepareStatement("INSERT INTO Auth_Google (user_id, google_id) VALUES (?, ?)");
+            pstmtLink->setInt(1, existingUserId);
+            pstmtLink->setString(2, googleId);
+            pstmtLink->executeUpdate();
+            delete pstmtLink;
+
+            sql::PreparedStatement* pstmtVerify = con->prepareStatement("UPDATE Users SET is_verified = 1 WHERE id = ?");
+            pstmtVerify->setInt(1, existingUserId);
+            pstmtVerify->executeUpdate();
+            delete pstmtVerify;
+
+            return true;
+        }
+        else {
+            std::string baseUsername = email.substr(0, email.find('@'));
+            unsigned int randomNum = 0;
+            if (RAND_bytes(reinterpret_cast<unsigned char*>(&randomNum), sizeof(randomNum)) != 1) {
+                std::cout << "[DB ERROR] Помилка RAND_bytes" << std::endl;
+                return false;
+            }
+            int secureSuffix = 1000 + (randomNum % 9000);
+
+            outUsername = baseUsername + "_" + std::to_string(secureSuffix);
+
+            sql::PreparedStatement* pstmtCreate = con->prepareStatement(
+                "INSERT INTO Users (username, email, is_verified) VALUES (?, ?, 1)"
+            );
+            pstmtCreate->setString(1, outUsername);
+            pstmtCreate->setString(2, email);
+            pstmtCreate->executeUpdate();
+            delete pstmtCreate;
+
+            sql::Statement* stmt = con->createStatement();
+            sql::ResultSet* resId = stmt->executeQuery("SELECT LAST_INSERT_ID() AS id");
+            int newUserId = -1;
+            if (resId->next()) {
+                newUserId = resId->getInt("id");
+            }
+            delete resId;
+            delete stmt;
+
+            if (newUserId != -1) {
+                sql::PreparedStatement* pstmtAuthGoogle = con->prepareStatement(
+                    "INSERT INTO Auth_Google (user_id, google_id) VALUES (?, ?)"
+                );
+                pstmtAuthGoogle->setInt(1, newUserId);
+                pstmtAuthGoogle->setString(2, googleId);
+                pstmtAuthGoogle->executeUpdate();
+                delete pstmtAuthGoogle;
+                return true;
+            }
+        }
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR LoginOrRegisterGoogleUser]: " << e.what() << std::endl;
+        return false;
+    }
+
+    return false;
+}
+
+void DatabaseManager::LogActivity(const std::string& username, const std::string& action, const std::string& ipAddress)
+{
+    try {
+        std::lock_guard<std::mutex> lock(dbMutex);
+        sql::PreparedStatement* pstmt = con->prepareStatement(
+            "INSERT INTO ActivityLogs (username, action, ip_address) VALUES (?, ?, ?)"
+        );
+        pstmt->setString(1, username);
+        pstmt->setString(2, action);
+        pstmt->setString(3, ipAddress);
+
+        pstmt->executeUpdate();
+        delete pstmt;
+    }
+    catch (sql::SQLException& e) {
+        std::cout << "[DB ERROR LogActivity]: " << e.what() << std::endl;
     }
 }

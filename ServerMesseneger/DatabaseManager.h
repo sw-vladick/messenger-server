@@ -51,6 +51,10 @@ public:
 
 	bool IsUserVerified(const std::string& username);
 	void SetUserEmailVerified(const std::string& username, const std::string& email);
+
+	bool LoginOrRegisterGoogleUser(const std::string& email, const std::string& googleId, std::string& outUsername);
+
+	void LogActivity(const std::string& username, const std::string& action, const std::string& ipAddress = "Unknown");
 private:
 	sql::Connection* con;
 	std::mutex dbMutex;
